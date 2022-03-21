@@ -4,16 +4,17 @@ pragma solidity ^0.8.4;
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "./CasinoGame.sol";
 
-struct BlackjackPlayer {
-    uint256 totalBet;
+struct BlackjackHand {
     bool isBust;
     bool isBlackjack;
-    /* Use separate string arrays instead of Card struct to resolve
-    * "Copying of type struct memory[] memory to storage not yet supported" errors
-    */
+    bool isDoubledDown;
     string[] cVals;
     string[] cSuits;
-    uint8[] splits;
+}
+
+struct BlackjackPlayer {
+    uint256 totalBet;
+    BlackjackHand[] hands;
 }
 
 struct BlackjackGame {
@@ -35,8 +36,8 @@ contract Blackjack is Ownable, CasinoGame {
 
     // Events (to be emitted)
     event NewRound(address player, uint256 initialBet);
-    event PlayerCardsUpdated(address player, string[] cardVals, string[] cardSuits);
-    event DealerCardsUpdated(address player, string[] cardVals, string[] cardSuits);
+    event PlayerCardsUpdated(address player, BlackjackHand[] hands);
+    event DealerCardsUpdated(address player, BlackjackHand[] hands);
     event PlayerBetUpdated(address player, uint256 newBet);
     event RoundResult(address player, string result); // result = blackjack | win | push | lose | bust
 
@@ -88,41 +89,42 @@ contract Blackjack is Ownable, CasinoGame {
         // Handle any payouts from the round based on player.totalbet
         BlackjackGame memory game = bjGames[_playerAddress];
         string memory result = "lose";
+        uint256 totalHands = game.player.hands.length;
 
         // Only reward player if they didn't bust
-        if(!game.player.isBust) {
-            uint16 playerHandVal = getHighestHandValue(game.player);            
+        // if(!game.player.isBust) {
+        //     uint16 playerHandVal = getHighestHandValue(game.player);            
 
-            // If player has natural blackjack or a higher hand, they win double their bet.
-            // If the player has the same hand as the dealer, they win their bet back (push).
-            if(game.player.isBlackjack) {
-                if(game.dealer.isBlackjack) {
-                    // If both player and dealer have blackjack, then push
-                    rewardUser(_playerAddress, game.player.totalBet);
-                    result = "push";
-                } else {
-                    // Otherwise, blackjack pays 3:2
-                    rewardUser(_playerAddress, ((game.player.totalBet*3) / 2) + game.player.totalBet);
-                    result = "blackjack";
-                }
-            } else if(!game.dealer.isBust) {
-                uint16 dealerHandVal = getHighestHandValue(game.dealer);
-                if (playerHandVal > dealerHandVal) {
-                    // Winning hand pays 1:1
-                    rewardUser(_playerAddress, game.player.totalBet*2);
-                    result = "win";
-                } else if (playerHandVal == dealerHandVal) {
-                    // Push pays back bet
-                    rewardUser(_playerAddress, game.player.totalBet);
-                    result = "push";
-                }
-            } else {
-                // Winning hand when dealer busts pays 1:1
-                result = "win";
-            }
-        } else {
-            result = "bust";
-        }
+        //     // If player has natural blackjack or a higher hand, they win double their bet.
+        //     // If the player has the same hand as the dealer, they win their bet back (push).
+        //     if(game.player.isBlackjack) {
+        //         if(game.dealer.isBlackjack) {
+        //             // If both player and dealer have blackjack, then push
+        //             rewardUser(_playerAddress, game.player.totalBet);
+        //             result = "push";
+        //         } else {
+        //             // Otherwise, blackjack pays 3:2
+        //             rewardUser(_playerAddress, ((game.player.totalBet*3) / 2) + game.player.totalBet);
+        //             result = "blackjack";
+        //         }
+        //     } else if(!game.dealer.isBust) {
+        //         uint16 dealerHandVal = getHighestHandValue(game.dealer);
+        //         if (playerHandVal > dealerHandVal) {
+        //             // Winning hand pays 1:1
+        //             rewardUser(_playerAddress, game.player.totalBet*2);
+        //             result = "win";
+        //         } else if (playerHandVal == dealerHandVal) {
+        //             // Push pays back bet
+        //             rewardUser(_playerAddress, game.player.totalBet);
+        //             result = "push";
+        //         }
+        //     } else {
+        //         // Winning hand when dealer busts pays 1:1
+        //         result = "win";
+        //     }
+        // } else {
+        //     result = "bust";
+        // }
 
         emit RoundResult(_playerAddress, result);
 
@@ -135,66 +137,94 @@ contract Blackjack is Ownable, CasinoGame {
     function deal(address _playerAddress) internal {
         require(isPlayingRound[_playerAddress] == true, "Not playing round.");
         BlackjackGame storage game = bjGames[_playerAddress];
-        dealSingleCard(game, game.player);
-        dealSingleCard(game, game.dealer);
-        dealSingleCard(game, game.player);
-        dealSingleCard(game, game.dealer);
+
+        // Initialize starting hand and deal first set of cards.
+        string[] memory pVals;
+        string[] memory pSuits; 
+        string[] memory dVals; 
+        string[] memory dSuits;
+        BlackjackHand memory playerHand  = BlackjackHand(false, false, false, pVals, pSuits);
+        BlackjackHand memory dealerHand  = BlackjackHand(false, false, false, dVals, dSuits);
+        game.player.hands.push(playerHand);
+        game.dealer.hands.push(dealerHand);
+        dealSingleCard(game, game.player.hands[0]);
+        dealSingleCard(game, game.dealer.hands[0]);
+        dealSingleCard(game, game.player.hands[0]);
+        dealSingleCard(game, game.dealer.hands[0]);
 
         // Let front end know the player and dealer hands
-        emit PlayerCardsUpdated(_playerAddress, game.player.cVals, game.player.cSuits);
-        emit DealerCardsUpdated(_playerAddress, game.dealer.cVals, game.dealer.cSuits);
+        emit PlayerCardsUpdated(_playerAddress, game.player.hands);
+        emit DealerCardsUpdated(_playerAddress, game.dealer.hands);
 
         // Check if player has natural blackjack
-        if(hasBlackjack(game.player))
-            game.player.isBlackjack = true;
+        if(hasBlackjack(game.player.hands[0]))
+            game.player.hands[0].isBlackjack = true;
             // Only a single player, so no need for dealer to continue playing after this
-        else if (hasBlackjack(game.dealer))
-            game.dealer.isBlackjack = true;
+        else if (hasBlackjack(game.dealer.hands[0]))
+            game.dealer.hands[0].isBlackjack = true;
+    }
+
+    function doublePlayerBet(address _address, BlackjackGame storage _game) private {
+        // Double the user's bet using a CasinoGame parent function
+        payContract(_address, _game.player.totalBet);
+        _game.player.totalBet = _game.player.totalBet * 2;
+        emit PlayerBetUpdated(_address, _game.player.totalBet);
     }
 
     // Handles splitting cards from a player's hand.
-    function splitPlayer() public {
-        require(isPlayingRound[msg.sender] == true, "Not playing round.");
-        
-        emit PlayerCardsUpdated(msg.sender, bjGames[msg.sender].player.cVals, bjGames[msg.sender].player.cSuits);
-    }
-
-    // Handles doubling down on a player's hand.
-    function doubleDown() public {
+    function splitPlayerHand(BlackjackHand memory _hand) public {
         require(isPlayingRound[msg.sender] == true, "Not playing round.");
 
         BlackjackGame storage game = bjGames[msg.sender];
-        require(game.player.cVals.length == 2, "Invalid number of cards.");
-        require(!game.player.isBust, "Already lost round.");
-        require(!game.player.isBlackjack, "Already won round.");
+        require(_hand.cVals.length == 2, "Invalid number of cards.");
+        require(!_hand.isBust, "Already lost round.");
+        require(!_hand.isBlackjack, "Already won round.");
+        require(!_hand.isDoubledDown, "Already doubled down.");
+
+        doublePlayerBet(msg.sender, game);
+
+        // Handle splitting logic
+
+        emit PlayerCardsUpdated(msg.sender, bjGames[msg.sender].player.hands);
+    }
+
+    // Handles doubling down on a player's hand.
+    function doubleDown(BlackjackHand memory _hand, uint8 handInd) public {
+        require(isPlayingRound[msg.sender] == true, "Not playing round.");
+
+        BlackjackGame storage game = bjGames[msg.sender];
+        require(_hand.cVals.length == 2, "Invalid number of cards.");
+        require(getLowestHandValue(_hand) <= 11, "Hand is too high.");
+        require(!_hand.isBust, "Already lost round.");
+        require(!_hand.isBlackjack, "Already won round.");
+        require(!_hand.isDoubledDown, "Already doubled down.");
 
         // Double the user's bet using a CasinoGame parent function
-        payContract(msg.sender, game.player.totalBet);
-        game.player.totalBet = game.player.totalBet * 2;
-        emit PlayerBetUpdated(msg.sender, game.player.totalBet);
+        doublePlayerBet(msg.sender, game);
 
         // Hit a single time, then end the player's turn
-        hitPlayer(msg.sender);
-        emit PlayerCardsUpdated(msg.sender, bjGames[msg.sender].player.cVals, bjGames[msg.sender].player.cSuits);
+        hitPlayer(msg.sender, handInd);
+        emit PlayerCardsUpdated(msg.sender, bjGames[msg.sender].player.hands);
         endPlayerTurn(msg.sender);
     }
 
     // Handles dealing another card to the player.
-    function hitPlayer(address _playerAddress) public {
+    function hitPlayer(address _playerAddress, uint8 handInd) public {
         require(isPlayingRound[_playerAddress] == true, "Not playing round.");
         
         BlackjackGame storage game = bjGames[_playerAddress];
-        require(game.player.cVals.length >= 2, "Not yet dealt cards.");
-        require(!game.player.isBust, "Already lost round.");
-        require(!game.player.isBlackjack, "Already won round.");
+        require(game.player.hands[handInd].cVals.length >= 2, "Not yet dealt cards.");
+        require(!game.player.hands[handInd].isBust, "Already lost round.");
+        require(!game.player.hands[handInd].isBlackjack, "Already won round.");
+        require(!game.player.hands[handInd].isDoubledDown, "Already doubled down.");
 
-        dealSingleCard(game, game.player);
-        emit PlayerCardsUpdated(_playerAddress, bjGames[_playerAddress].player.cVals, bjGames[_playerAddress].player.cSuits);
+        dealSingleCard(game, game.player.hands[handInd]);
+        emit PlayerCardsUpdated(_playerAddress, bjGames[_playerAddress].player.hands);
 
         // Check if player has gone over 21
-        uint16 handVal = getLowestHandValue(game.player);
+        uint16 handVal = getLowestHandValue(game.player.hands[handInd]);
         if(handVal  > 21)
-           game.player.isBust = true;
+           game.player.hands[handInd].isBust = true;
     }
 
     // Handles finishing a player's turn.
@@ -202,7 +232,7 @@ contract Blackjack is Ownable, CasinoGame {
         require(isPlayingRound[_playerAddress] == true, "Not playing round.");
 
         BlackjackGame storage game = bjGames[_playerAddress];
-        require(game.player.cVals.length >= 2, "Not yet dealt cards.");
+        require(game.player.hands.length > 1 && game.player.hands[0].cVals.length >= 2, "Not yet dealt cards.");
         
         // Begin dealer's turn
         dealerPlay(_playerAddress);
@@ -215,12 +245,12 @@ contract Blackjack is Ownable, CasinoGame {
 
         // Dealer hits on soft 17
         // Dealer stands on 17 or above
-        while(!game.dealer.isBust && getLowestHandValue(game.dealer) < 17) {
+        while(!game.dealer.hands[0].isBust && getLowestHandValue(game.dealer.hands[0]) < 17) {
             hitDealer(_playerAddress, game);
             // Check if dealer has gone over 21 or has hit 21
-            uint16 handVal = getLowestHandValue(game.dealer);
+            uint16 handVal = getLowestHandValue(game.dealer.hands[0]);
             if(handVal  > 21) {
-            game.dealer.isBust = true;
+            game.dealer.hands[0].isBust = true;
             } else if(handVal >= 17) {
                 break;
             }
@@ -232,12 +262,12 @@ contract Blackjack is Ownable, CasinoGame {
 
     // Handles dealing another card to the dealer.
     function hitDealer(address _playerAddress, BlackjackGame storage game) private {
-        dealSingleCard(game, game.dealer);
-        emit DealerCardsUpdated(_playerAddress, bjGames[_playerAddress].dealer.cVals, bjGames[_playerAddress].dealer.cSuits);
+        dealSingleCard(game, game.dealer.hands[0]);
+        emit DealerCardsUpdated(_playerAddress, bjGames[_playerAddress].dealer.hands);
     }
 
     // Handles selecting and dealing a single card to the specified player.
-    function dealSingleCard(BlackjackGame storage _game, BlackjackPlayer storage _player) private {
+    function dealSingleCard(BlackjackGame storage _game, BlackjackHand storage _hand) private {
         require(isPlayingRound[msg.sender] == true, "Not playing round.");
 
         bool validCard = false;
@@ -259,11 +289,11 @@ contract Blackjack is Ownable, CasinoGame {
             require(tries <= numDecks*52, "No cards left to deal.");
         }
 
-        // Update value and suit, then add to player's cards
-        _player.cVals.push(cv);
-        _player.cSuits.push(cs);
+        // Update value and suit, then add to specified hand
+        _hand.cVals.push(cv);
+        _hand.cSuits.push(cs);
 
-        require(_player.cVals.length == _player.cSuits.length, "Error dealing card.");
+        require(_hand.cVals.length == _hand.cSuits.length, "Error dealing card.");
     }
 
     // Resets a BlackjackGame and all the internal attributes.
@@ -271,25 +301,27 @@ contract Blackjack is Ownable, CasinoGame {
         BlackjackGame storage game = bjGames[_playerAddress];
         // Reset player attributes
         game.player.totalBet = 0;
-        game.player.isBust = false;
-        game.player.isBlackjack = false;
-        delete game.player.cVals;
-        delete game.player.cSuits;
+        for(uint i = 0; i < game.player.hands.length; i++) {
+            delete game.player.hands[i].cVals;
+            delete game.player.hands[i].cSuits;
+        }
+        delete game.player.hands;
 
         // Reset dealer attributes
-        game.dealer.isBust = false;
-        game.dealer.isBlackjack = false;
-        delete game.dealer.cVals;
-        delete game.dealer.cSuits;
+        for(uint i = 0; i < game.dealer.hands.length; i++) {
+            delete game.dealer.hands[i].cVals;
+            delete game.dealer.hands[i].cSuits;
+        }
+        delete game.dealer.hands;
     }
 
-    // Returns true if the player has a natural blackjack, otherwise false.
-    function hasBlackjack(BlackjackPlayer memory _player) private pure returns (bool) {
-        require(_player.cVals.length == 2, "Incorrect amount of cards.");
+    // Returns true if the hand has a natural blackjack, otherwise false.
+    function hasBlackjack(BlackjackHand memory _hand) private pure returns (bool) {
+        require(_hand.cVals.length == 2, "Incorrect amount of cards.");
         bool hasAce = false;
         bool hasFace = false;
-        for (uint i = 0; i < _player.cVals.length; i++) {
-            uint16 cardVal = getCardValue(_player.cVals[i]);
+        for (uint i = 0; i < _hand.cVals.length; i++) {
+            uint16 cardVal = getCardValue(_hand.cVals[i]);
             if(cardVal == 10)
                 hasFace = true;
             else if(cardVal == 0)
@@ -300,10 +332,10 @@ contract Blackjack is Ownable, CasinoGame {
     }
 
     // Returns the lowest numerical value of a player's hand. Always assumes Ace is 1.
-    function getLowestHandValue(BlackjackPlayer memory _player) private pure returns (uint16) {
+    function getLowestHandValue(BlackjackHand memory _hand) private pure returns (uint16) {
         uint16 totalVal = 0;
-        for (uint i = 0; i < _player.cVals.length; i++) {
-            uint16 cardVal = getCardValue(_player.cVals[i]);
+        for (uint i = 0; i < _hand.cVals.length; i++) {
+            uint16 cardVal = getCardValue(_hand.cVals[i]);
             if(cardVal == 0)
                 totalVal += 1;
             else
@@ -315,13 +347,13 @@ contract Blackjack is Ownable, CasinoGame {
     
 
     // Returns the highest numerical value of a player's hand, trying to avoid going over 21.
-    function getHighestHandValue(BlackjackPlayer memory _player) private pure returns (uint16) {
+    function getHighestHandValue(BlackjackHand memory _hand) private pure returns (uint16) {
         uint16 totalVal = 0;
         uint8[] memory aces;
         // First count non-Aces. Then, keep assuming 11 for Ace
         // until it would cause a bust, in which case we then assume 1.
-        for(uint i = 0; i < _player.cVals.length; i++) {
-            uint16 cardVal = getCardValue(_player.cVals[i]);
+        for(uint i = 0; i < _hand.cVals.length; i++) {
+            uint16 cardVal = getCardValue(_hand.cVals[i]);
             if(cardVal == 0) 
                 aces[aces.length] = uint8(i);
             else
@@ -356,16 +388,20 @@ contract Blackjack is Ownable, CasinoGame {
     function cardLeftInDeck(BlackjackGame storage _game, string memory _cardVal, string memory _cardSuit) internal view returns (bool) {
         uint8 occurrences = 0;
         // Check player cards
-        for (uint i = 0; i < _game.player.cVals.length; i++) {
-            if(keccak256(abi.encodePacked((_game.player.cVals[i]))) == keccak256(abi.encodePacked((_cardVal))) && 
-                keccak256(abi.encodePacked((_game.player.cSuits[i]))) == keccak256(abi.encodePacked((_cardSuit))))
-                occurrences++;
+        for (uint i = 0; i < _game.player.hands.length; i++) {
+            for (uint j = 0; j < _game.player.hands[i].cVals.length; j++) {
+                if(keccak256(abi.encodePacked((_game.player.hands[i].cVals[j]))) == keccak256(abi.encodePacked((_cardVal))) && 
+                    keccak256(abi.encodePacked((_game.player.hands[i].cSuits[j]))) == keccak256(abi.encodePacked((_cardSuit))))
+                    occurrences++;  
+            }
         }
         // Check dealer cards
-        for (uint i = 0; i < _game.dealer.cVals.length; i++) {
-            if(keccak256(abi.encodePacked((_game.dealer.cVals[i]))) == keccak256(abi.encodePacked((_cardVal))) && 
-                keccak256(abi.encodePacked((_game.dealer.cSuits[i]))) == keccak256(abi.encodePacked((_cardSuit))))
-                occurrences++;
+        for (uint i = 0; i < _game.dealer.hands.length; i++) {
+            for (uint j = 0; j < _game.dealer.hands[i].cVals.length; j++) {
+                if(keccak256(abi.encodePacked((_game.dealer.hands[i].cVals[j]))) == keccak256(abi.encodePacked((_cardVal))) && 
+                    keccak256(abi.encodePacked((_game.dealer.hands[i].cSuits[j]))) == keccak256(abi.encodePacked((_cardSuit))))
+                    occurrences++;  
+            }
         }
 
         return occurrences < numDecks;
